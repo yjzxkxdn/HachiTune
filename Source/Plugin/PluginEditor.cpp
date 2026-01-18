@@ -101,13 +101,16 @@ void HachiTuneAudioProcessorEditor::setupNonARAMode() {
 void HachiTuneAudioProcessorEditor::setupCallbacks() {
     // When project data changes (analysis complete or synthesis complete)
     mainComponent.onProjectDataChanged = [this]() {
-        if (mainComponent.getVocoder())
-            audioProcessor.getRealtimeProcessor().setVocoder(mainComponent.getVocoder());
-
+        // IMPORTANT: Set project FIRST, then vocoder
+        // setProject() calls invalidate() which needs a valid project
         if (mainComponent.getProject())
             audioProcessor.getRealtimeProcessor().setProject(mainComponent.getProject());
 
-        audioProcessor.getRealtimeProcessor().invalidate();
+        // setVocoder() does NOT call invalidate() anymore (safe to call anytime)
+        if (mainComponent.getVocoder())
+            audioProcessor.getRealtimeProcessor().setVocoder(mainComponent.getVocoder());
+
+        // No need for extra invalidate() - setProject() already calls it
     };
 
     // onPitchEditFinished is handled by onProjectDataChanged (called after async synthesis completes)

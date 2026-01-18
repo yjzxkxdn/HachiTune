@@ -1765,9 +1765,30 @@ void MainComponent::updatePlaybackPosition(double timeSeconds) {
   if (!isPluginMode())
     return;
 
+  // Only follow host position if we have a valid project with audio
+  if (!project || project->getAudioData().waveform.getNumSamples() == 0)
+    return;
+
+  // Clamp position to audio duration (don't go beyond the end)
+  double duration = project->getAudioData().getDuration();
+  double clampedTime = std::min(timeSeconds, static_cast<double>(duration));
+
   // Update cursor position using the same mechanism as AudioEngine
-  pendingCursorTime.store(timeSeconds);
+  pendingCursorTime.store(clampedTime);
   hasPendingCursorUpdate.store(true);
+
+  // In plugin mode, the host controls playback state
+  // Set isPlaying to true when we receive position updates
+  // This enables "follow playback" feature
+  isPlaying = true;
+}
+
+void MainComponent::notifyHostStopped() {
+  if (!isPluginMode())
+    return;
+
+  // In plugin mode, the host controls playback state
+  isPlaying = false;
 }
 
 bool MainComponent::isARAModeActive() const {

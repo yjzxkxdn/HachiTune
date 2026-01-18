@@ -75,6 +75,7 @@ public:
 
   // Plugin mode - update playback position from host
   void updatePlaybackPosition(double timeSeconds);
+  void notifyHostStopped();  // Called when host stops playback
 
 private:
   void openFile();

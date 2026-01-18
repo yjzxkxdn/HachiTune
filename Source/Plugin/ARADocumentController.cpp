@@ -103,6 +103,19 @@ bool HachiTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
     bool isPlaying = posInfo.getIsPlaying();
     int numSamples = buffer.getNumSamples();
 
+    // Get document controller for accessing MainComponent
+    auto* docCtrl = getDocController();
+
+    // Update UI cursor position from host playback position
+    if (docCtrl && docCtrl->getMainComponent()) {
+        if (isPlaying) {
+            double timeInSeconds = static_cast<double>(timeInSamples) / sampleRate;
+            docCtrl->getMainComponent()->updatePlaybackPosition(timeInSeconds);
+        } else {
+            docCtrl->getMainComponent()->notifyHostStopped();
+        }
+    }
+
     if (!isPlaying) {
         buffer.clear();
         return true;
@@ -118,7 +131,6 @@ bool HachiTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
     }
 
     // Get processor from document controller (dynamic lookup)
-    auto* docCtrl = getDocController();
     auto* realtimeProcessor = docCtrl ? docCtrl->getRealtimeProcessor() : nullptr;
 
     // Apply pitch correction if processor available and ready

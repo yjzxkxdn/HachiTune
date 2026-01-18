@@ -23,7 +23,8 @@ void RealtimePitchProcessor::setVocoder(Vocoder* voc) {
         const juce::ScopedLock sl(bufferLock);
         vocoder = voc;
     }
-    invalidate();
+    // Don't call invalidate() here - wait for project to be set first
+    // invalidate() will be called by setProject() or explicitly
 }
 
 void RealtimePitchProcessor::prepareToPlay(double sr, int) {
@@ -96,8 +97,14 @@ void RealtimePitchProcessor::invalidate() {
     }
 
     auto& audioData = project->getAudioData();
-    if (audioData.waveform.getNumSamples() == 0) {
-        DBG("  -> Skipped: waveform is empty");
+
+    // Safety check: verify waveform has valid dimensions before accessing
+    const int numSamples = audioData.waveform.getNumSamples();
+    const int numChannels = audioData.waveform.getNumChannels();
+
+    if (numSamples <= 0 || numChannels <= 0) {
+        DBG("  -> Skipped: waveform is empty or invalid (samples=" << numSamples
+            << ", channels=" << numChannels << ")");
         return;
     }
 

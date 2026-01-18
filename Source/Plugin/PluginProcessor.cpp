@@ -131,6 +131,23 @@ void HachiTuneAudioProcessor::processNonARAMode(juce::AudioBuffer<float>& buffer
                                                    const juce::AudioPlayHead::PositionInfo& posInfo) {
     const int numSamples = buffer.getNumSamples();
     const int numChannels = buffer.getNumChannels();
+    const bool hostIsPlaying = posInfo.getIsPlaying();
+
+    // Update UI cursor position from host playback position (only when we have analyzed audio)
+    if (mainComponent) {
+        if (hostIsPlaying && captureState == CaptureState::Complete) {
+            // Only sync cursor after capture is complete and analyzed
+            double timeInSeconds = 0.0;
+            if (auto time = posInfo.getTimeInSeconds())
+                timeInSeconds = *time;
+            else if (auto samples = posInfo.getTimeInSamples())
+                timeInSeconds = static_cast<double>(*samples) / hostSampleRate;
+
+            mainComponent->updatePlaybackPosition(timeInSeconds);
+        } else if (!hostIsPlaying && captureState == CaptureState::Complete) {
+            mainComponent->notifyHostStopped();
+        }
+    }
 
     // Check if we have analyzed project ready for real-time processing
     bool hasProject = mainComponent && mainComponent->getProject() &&
@@ -150,7 +167,8 @@ void HachiTuneAudioProcessor::processNonARAMode(juce::AudioBuffer<float>& buffer
     // Capture mode
     CaptureState state = captureState.load();
 
-    if (state == CaptureState::WaitingForAudio) {
+    // Start capturing when host plays and we detect audio
+    if (state == CaptureState::WaitingForAudio && hostIsPlaying) {
         // Detect audio input
         float maxLevel = 0.0f;
         for (int ch = 0; ch < numChannels; ++ch) {
@@ -163,23 +181,36 @@ void HachiTuneAudioProcessor::processNonARAMode(juce::AudioBuffer<float>& buffer
             captureState = CaptureState::Capturing;
             capturePosition = 0;
             state = CaptureState::Capturing;
+
+            // Notify UI that capture started
+            if (mainComponent) {
+                juce::MessageManager::callAsync([this]() {
+                    if (mainComponent)
+                        mainComponent->getToolbar().setStatusMessage(TR("progress.recording"));
+                });
+            }
         }
     }
 
     if (state == CaptureState::Capturing) {
-        // Capture audio
-        int spaceLeft = captureBuffer.getNumSamples() - capturePosition;
-        int toCopy = std::min(numSamples, spaceLeft);
+        if (hostIsPlaying) {
+            // Continue capturing while host is playing
+            int spaceLeft = captureBuffer.getNumSamples() - capturePosition;
+            int toCopy = std::min(numSamples, spaceLeft);
 
-        for (int ch = 0; ch < std::min(numChannels, captureBuffer.getNumChannels()); ++ch)
-            captureBuffer.copyFrom(ch, capturePosition, buffer, ch, 0, toCopy);
+            if (toCopy > 0) {
+                for (int ch = 0; ch < std::min(numChannels, captureBuffer.getNumChannels()); ++ch)
+                    captureBuffer.copyFrom(ch, capturePosition, buffer, ch, 0, toCopy);
+                capturePosition += toCopy;
+            }
 
-        capturePosition += toCopy;
-
-        // Auto-stop after 30 seconds or buffer full
-        int autoStopSamples = static_cast<int>(hostSampleRate * 30);
-        if (capturePosition >= autoStopSamples || capturePosition >= captureBuffer.getNumSamples())
+            // Only stop if buffer is completely full (safety limit)
+            if (capturePosition >= captureBuffer.getNumSamples())
+                finishCapture();
+        } else {
+            // Host stopped playing - finish capture and analyze
             finishCapture();
+        }
     }
 
     // Passthrough during capture
