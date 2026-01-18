@@ -3,8 +3,6 @@ name: Build HachiTune
 on:
   push:
     branches: [main, master,refactor]
-    tags:
-      - 'v*'
   pull_request:
     branches: [main, master,refactor]
   workflow_dispatch:
@@ -47,11 +45,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path package
           
           # Copy standalone app
-          Copy-Item -Path "build/PitchEditor_artefacts/${{ env.BUILD_TYPE }}/*" -Destination "package/" -Recurse -Force
+          Copy-Item -Path "build/HachiTune_artefacts/${{ env.BUILD_TYPE }}/*" -Destination "package/" -Recurse -Force
           
           # Copy VST3 plugin
-          if (Test-Path "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3") {
-            Copy-Item -Path "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" -Destination "package/" -Recurse -Force
+          if (Test-Path "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3") {
+            Copy-Item -Path "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" -Destination "package/" -Recurse -Force
           }
 
       - name: Upload Artifact
@@ -110,11 +108,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path package
 
           # Copy standalone app
-          Copy-Item -Path "build/PitchEditor_artefacts/${{ env.BUILD_TYPE }}/*" -Destination "package/" -Recurse -Force
+          Copy-Item -Path "build/HachiTune_artefacts/${{ env.BUILD_TYPE }}/*" -Destination "package/" -Recurse -Force
 
           # Copy VST3 plugin
-          if (Test-Path "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3") {
-            Copy-Item -Path "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" -Destination "package/" -Recurse -Force
+          if (Test-Path "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3") {
+            Copy-Item -Path "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" -Destination "package/" -Recurse -Force
           }
 
           # Verify DirectML.dll is included
@@ -163,11 +161,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path package
           
           # Copy standalone app
-          Copy-Item -Path "build/PitchEditor_artefacts/${{ env.BUILD_TYPE }}/*" -Destination "package/" -Recurse -Force
+          Copy-Item -Path "build/HachiTune_artefacts/${{ env.BUILD_TYPE }}/*" -Destination "package/" -Recurse -Force
           
           # Copy VST3 plugin
-          if (Test-Path "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3") {
-            Copy-Item -Path "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" -Destination "package/" -Recurse -Force
+          if (Test-Path "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3") {
+            Copy-Item -Path "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" -Destination "package/" -Recurse -Force
           }
 
       - name: Upload Artifact
@@ -211,16 +209,16 @@ jobs:
           mkdir -p package
           
           # Copy standalone app
-          cp -R "build/PitchEditor_artefacts/${{ env.BUILD_TYPE }}/HachiTune.app" package/
+          cp -R "build/HachiTune_artefacts/${{ env.BUILD_TYPE }}/HachiTune.app" package/
           
           # Copy VST3 plugin
-          if [ -d "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" ]; then
-            cp -R "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3/HachiTune.vst3" package/
+          if [ -d "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" ]; then
+            cp -R "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3/HachiTune.vst3" package/
           fi
           
           # Copy AU plugin
-          if [ -d "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/AU" ]; then
-            cp -R "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/AU/HachiTune.component" package/
+          if [ -d "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/AU" ]; then
+            cp -R "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/AU/HachiTune.component" package/
           fi
 
       - name: Ad-hoc Code Sign
@@ -316,11 +314,11 @@ jobs:
           mkdir -p package/HachiTune
           
           # Copy standalone app
-          cp -R build/PitchEditor_artefacts/${{ env.BUILD_TYPE }}/* package/HachiTune/
+          cp -R build/HachiTune_artefacts/${{ env.BUILD_TYPE }}/* package/HachiTune/
           
           # Copy VST3 plugin
-          if [ -d "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" ]; then
-            cp -R build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3 package/HachiTune/
+          if [ -d "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" ]; then
+            cp -R build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3 package/HachiTune/
           fi
           
           # Create launch script
@@ -397,11 +395,11 @@ jobs:
           mkdir -p package/HachiTune
           
           # Copy standalone app
-          cp -R build/PitchEditor_artefacts/${{ env.BUILD_TYPE }}/* package/HachiTune/
+          cp -R build/HachiTune_artefacts/${{ env.BUILD_TYPE }}/* package/HachiTune/
           
           # Copy VST3 plugin
-          if [ -d "build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" ]; then
-            cp -R build/PitchEditorPlugin_artefacts/${{ env.BUILD_TYPE }}/VST3 package/HachiTune/
+          if [ -d "build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3" ]; then
+            cp -R build/HachiTunePlugin_artefacts/${{ env.BUILD_TYPE }}/VST3 package/HachiTune/
           fi
           
           # Create launch script
