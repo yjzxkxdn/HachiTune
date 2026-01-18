@@ -1199,6 +1199,23 @@ void MainComponent::seek(double time) {
   audioEngine->seek(time);
   pianoRoll.setCursorTime(time);
   toolbar.setCurrentTime(time);
+
+  // Scroll view to make cursor visible
+  float cursorX = static_cast<float>(time * pianoRoll.getPixelsPerSecond());
+  float viewWidth = static_cast<float>(pianoRoll.getWidth() - 74); // minus piano keys and scrollbar
+  float scrollX = static_cast<float>(pianoRoll.getScrollX());
+
+  // If cursor is outside visible area, scroll to show it
+  if (cursorX < scrollX || cursorX > scrollX + viewWidth) {
+    // Center cursor in view, or scroll to start if time is 0
+    double newScrollX;
+    if (time < 0.001) {
+      newScrollX = 0.0; // Go to start
+    } else {
+      newScrollX = std::max(0.0, static_cast<double>(cursorX - viewWidth * 0.3));
+    }
+    pianoRoll.setScrollX(newScrollX);
+  }
 }
 
 void MainComponent::resynthesizeIncremental() {

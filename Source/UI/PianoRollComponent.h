@@ -145,7 +145,6 @@ private:
     float pixelsPerSemitone = DEFAULT_PIXELS_PER_SEMITONE;
     
     double cursorTime = 0.0;
-    double lastCursorTime = -1.0;  // Track previous cursor position for dirty rect
     double scrollX = 0.0;
     double scrollY = 0.0;
     

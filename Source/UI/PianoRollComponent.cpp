@@ -138,8 +138,22 @@ void PianoRollComponent::paint(juce::Graphics &g) {
     float cursorBottom =
         static_cast<float>(getHeight() - 8); // Exclude scrollbar
 
-    g.setColour(juce::Colours::white);
-    g.fillRect(x - 0.5f, cursorTop, 1.0f, cursorBottom);
+    // Only draw if cursor is in visible area
+    if (x >= pianoKeysWidth && x < getWidth() - 8) {
+      g.setColour(juce::Colours::white);
+      g.fillRect(x - 0.5f, cursorTop, 1.0f, cursorBottom);
+
+      // Draw triangle playhead indicator at top of timeline
+      constexpr float triangleWidth = 10.0f;
+      constexpr float triangleHeight = 8.0f;
+      juce::Path triangle;
+      triangle.addTriangle(
+          x - triangleWidth * 0.5f, 0.0f,           // Top-left
+          x + triangleWidth * 0.5f, 0.0f,           // Top-right
+          x, triangleHeight                          // Bottom-center (pointing down)
+      );
+      g.fillPath(triangle);
+    }
   }
 
   // Draw piano keys
@@ -836,13 +850,14 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
 
   // Handle timeline clicks - seek to position
   if (e.y < timelineHeight && e.x >= pianoKeysWidth) {
-    double time = xToTime(adjustedX);
-    cursorTime = std::max(0.0, time);
+    double time = std::max(0.0, xToTime(adjustedX));
+
+    // Use setCursorTime to properly handle dirty rect for old position
+    setCursorTime(time);
 
     if (onSeek)
-      onSeek(cursorTime);
+      onSeek(time);
 
-    repaint();
     return;
   }
 
@@ -1447,24 +1462,25 @@ void PianoRollComponent::setCursorTime(double time) {
   if (std::abs(cursorTime - time) < 0.0001)
     return; // Skip if no change
 
-  // Calculate dirty rectangles for old and new cursor positions
+  // Calculate dirty rectangle for cursor position
+  // Include timeline area (from 0) and extra width for triangle indicator
   auto getCursorRect = [this](double t) -> juce::Rectangle<int> {
     float x =
         static_cast<float>(t * pixelsPerSecond - scrollX) + pianoKeysWidth;
-    int width = 3; // Cursor width + 1px margin
-    return juce::Rectangle<int>(static_cast<int>(x - 1), timelineHeight, width,
-                                getHeight() - timelineHeight);
+    constexpr int triangleHalfWidth = 6; // Half of triangle width + margin
+    int rectX = static_cast<int>(x) - triangleHalfWidth;
+    int rectWidth = triangleHalfWidth * 2 + 2; // Full triangle width + cursor line
+    // Start from 0 (top of timeline) to include triangle indicator
+    return juce::Rectangle<int>(rectX, 0, rectWidth, getHeight());
   };
 
-  // Repaint old cursor position
-  if (lastCursorTime >= 0.0) {
-    repaint(getCursorRect(lastCursorTime));
-  }
+  // Repaint OLD cursor position (the current cursorTime that's about to change)
+  repaint(getCursorRect(cursorTime));
 
-  lastCursorTime = cursorTime;
+  // Update cursor time
   cursorTime = time;
 
-  // Repaint new cursor position
+  // Repaint NEW cursor position
   repaint(getCursorRect(cursorTime));
 }
 
