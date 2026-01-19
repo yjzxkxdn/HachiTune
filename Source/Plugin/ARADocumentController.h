@@ -3,6 +3,10 @@
 #include "../Audio/RealtimePitchProcessor.h"
 #include "../JuceHeader.h"
 
+#include <atomic>
+#include <cstdint>
+#include <thread>
+
 #if JucePlugin_Enable_ARA
 
 class MainComponent;
@@ -14,57 +18,89 @@ class HachiTuneDocumentController;
  */
 class HachiTunePlaybackRenderer : public juce::ARAPlaybackRenderer {
 public:
-    using ARAPlaybackRenderer::ARAPlaybackRenderer;
+  using ARAPlaybackRenderer::ARAPlaybackRenderer;
 
-    void prepareToPlay(double sampleRateIn, int maxBlockSize, int numChannelsIn,
-                       juce::AudioProcessor::ProcessingPrecision,
-                       AlwaysNonRealtime alwaysNonRealtime) override;
-    void releaseResources() override;
-    bool processBlock(juce::AudioBuffer<float>& buffer,
-                      juce::AudioProcessor::Realtime realtime,
-                      const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept override;
+  void prepareToPlay(double sampleRateIn, int maxBlockSize, int numChannelsIn,
+                     juce::AudioProcessor::ProcessingPrecision,
+                     AlwaysNonRealtime alwaysNonRealtime) override;
+  void releaseResources() override;
+  bool processBlock(
+      juce::AudioBuffer<float> &buffer, juce::AudioProcessor::Realtime realtime,
+      const juce::AudioPlayHead::PositionInfo &positionInfo) noexcept override;
 
 private:
-    bool readFromARARegions(juce::AudioBuffer<float>& buffer,
-                            juce::int64 timeInSamples, int numSamples);
-    HachiTuneDocumentController* getDocController() const;
+  struct HostUiSyncState {
+    std::atomic<double> latestSeconds{0.0};
+    std::atomic<bool> posPending{false};
+    std::atomic<bool> stoppedPending{false};
+  };
 
-    std::map<juce::ARAAudioSource*, std::unique_ptr<juce::ARAAudioSourceReader>> readers;
-    std::unique_ptr<juce::AudioBuffer<float>> tempBuffer;
-    double sampleRate = 44100.0;
-    int numChannels = 2;
+  bool readFromARARegions(juce::AudioBuffer<float> &buffer,
+                          juce::int64 timeInSamples, int numSamples);
+  HachiTuneDocumentController *getDocController() const;
+
+  std::map<juce::ARAAudioSource *, std::unique_ptr<juce::ARAAudioSourceReader>>
+      readers;
+  std::unique_ptr<juce::AudioBuffer<float>> tempBuffer;
+  std::shared_ptr<HostUiSyncState> hostUiSyncState =
+      std::make_shared<HostUiSyncState>();
+  double sampleRate = 44100.0;
+  int numChannels = 2;
 };
 
 /**
  * ARA Document Controller
  * Manages ARA document lifecycle and audio source analysis
  */
-class HachiTuneDocumentController : public juce::ARADocumentControllerSpecialisation {
+class HachiTuneDocumentController
+    : public juce::ARADocumentControllerSpecialisation {
 public:
-    using ARADocumentControllerSpecialisation::ARADocumentControllerSpecialisation;
+  using ARADocumentControllerSpecialisation::
+      ARADocumentControllerSpecialisation;
 
-    void didAddAudioSourceToDocument(juce::ARADocument* doc, juce::ARAAudioSource* audioSource) override;
-    void reanalyze();
+  ~HachiTuneDocumentController() override;
 
-    void setMainComponent(MainComponent* mc) { mainComponent = mc; }
-    MainComponent* getMainComponent() const { return mainComponent; }
+  void didAddAudioSourceToDocument(juce::ARADocument *doc,
+                                   juce::ARAAudioSource *audioSource) override;
+  void reanalyze();
 
-    void setRealtimeProcessor(RealtimePitchProcessor* processor) { realtimeProcessor = processor; }
-    RealtimePitchProcessor* getRealtimeProcessor() const { return realtimeProcessor; }
+  void setMainComponent(MainComponent *mc) { mainComponent = mc; }
+  MainComponent *getMainComponent() const { return mainComponent; }
+
+  void setRealtimeProcessor(RealtimePitchProcessor *processor) {
+    realtimeProcessor = processor;
+  }
+  RealtimePitchProcessor *getRealtimeProcessor() const {
+    return realtimeProcessor;
+  }
 
 protected:
-    juce::ARAPlaybackRenderer* doCreatePlaybackRenderer() noexcept override;
-    bool doRestoreObjectsFromStream(juce::ARAInputStream& input,
-                                    const juce::ARARestoreObjectsFilter* filter) noexcept override;
-    bool doStoreObjectsToStream(juce::ARAOutputStream& output,
-                                const juce::ARAStoreObjectsFilter* filter) noexcept override;
+  juce::ARAPlaybackRenderer *doCreatePlaybackRenderer() noexcept override;
+  bool doRestoreObjectsFromStream(
+      juce::ARAInputStream &input,
+      const juce::ARARestoreObjectsFilter *filter) noexcept override;
+  bool doStoreObjectsToStream(
+      juce::ARAOutputStream &output,
+      const juce::ARAStoreObjectsFilter *filter) noexcept override;
 
 private:
-    void processAudioSource(juce::ARAAudioSource* source);
+  void processAudioSource(juce::ARAAudioSource *source);
 
-    MainComponent* mainComponent = nullptr;
-    juce::ARAAudioSource* currentAudioSource = nullptr;
-    RealtimePitchProcessor* realtimeProcessor = nullptr;
+  void stopAnalysisThread();
+
+  struct AnalysisState {
+    std::atomic<std::uint64_t> jobId{0};
+    std::atomic<bool> cancel{false};
+  };
+
+  MainComponent *mainComponent = nullptr;
+  juce::ARAAudioSource *currentAudioSource = nullptr;
+  RealtimePitchProcessor *realtimeProcessor = nullptr;
+
+  std::shared_ptr<AnalysisState> analysisState =
+      std::make_shared<AnalysisState>();
+  std::thread analysisThread;
+  std::thread analysisJoinerThread;
 };
 
 #endif // JucePlugin_Enable_ARA

@@ -54,12 +54,10 @@ void HachiTuneAudioProcessor::prepareToPlay(double sampleRate,
                       getMainBusNumOutputChannels(), getProcessingPrecision());
 #endif
 
-  // Pre-allocate capture buffer for non-ARA mode
-  int maxSamples = static_cast<int>(sampleRate * MAX_CAPTURE_SECONDS);
-  captureBuffer.setSize(getMainBusNumOutputChannels(), maxSamples);
-  captureBuffer.clear();
-  capturePosition = 0;
-  captureState = CaptureState::WaitingForAudio;
+  // Non-ARA capture controller
+  captureController->prepare(sampleRate, getMainBusNumOutputChannels(),
+                             MAX_CAPTURE_SECONDS);
+  lastCaptureUiState = captureController->getState();
 }
 
 void HachiTuneAudioProcessor::releaseResources() {
@@ -117,6 +115,20 @@ void HachiTuneAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
   juce::ignoreUnused(midiMessages);
   juce::ScopedNoDenormals noDenormals;
 
+  // Best-effort host transport control (must be called from processBlock)
+  if (auto *playHead = getPlayHead()) {
+    if (playHead->canControlTransport()) {
+      if (stopRequested.exchange(false)) {
+        playHead->transportPlay(false);
+        playHead->transportRewind();
+      }
+
+      if (hasPendingPlayRequest.exchange(false)) {
+        playHead->transportPlay(requestedPlayState.load());
+      }
+    }
+  }
+
 #if JucePlugin_Enable_ARA
   // ARA mode: let ARA renderer handle audio
   if (processBlockForARA(buffer, isRealtime(), getPlayHead()))
@@ -130,32 +142,16 @@ void HachiTuneAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer,
       posInfo = *info;
   }
 
-  processNonARAMode(buffer, posInfo);
+  processNonARAMode(buffer, posInfo,
+                    isRealtime() == juce::AudioProcessor::Realtime::yes);
 }
 
 void HachiTuneAudioProcessor::processNonARAMode(
     juce::AudioBuffer<float> &buffer,
-    const juce::AudioPlayHead::PositionInfo &posInfo) {
+    const juce::AudioPlayHead::PositionInfo &posInfo, bool isRealtime) {
   const int numSamples = buffer.getNumSamples();
   const int numChannels = buffer.getNumChannels();
   const bool hostIsPlaying = posInfo.getIsPlaying();
-
-  // Update UI cursor position from host playback position (only when we have
-  // analyzed audio)
-  if (mainComponent) {
-    if (hostIsPlaying && captureState == CaptureState::Complete) {
-      // Only sync cursor after capture is complete and analyzed
-      double timeInSeconds = 0.0;
-      if (auto time = posInfo.getTimeInSeconds())
-        timeInSeconds = *time;
-      else if (auto samples = posInfo.getTimeInSamples())
-        timeInSeconds = static_cast<double>(*samples) / hostSampleRate;
-
-      mainComponent->updatePlaybackPosition(timeInSeconds);
-    } else if (!hostIsPlaying && captureState == CaptureState::Complete) {
-      mainComponent->notifyHostStopped();
-    }
-  }
 
   // Check if we have analyzed project ready for real-time processing
   bool hasProject =
@@ -163,6 +159,72 @@ void HachiTuneAudioProcessor::processNonARAMode(
       mainComponent->getProject()->getAudioData().waveform.getNumSamples() >
           0 &&
       !mainComponent->getProject()->getAudioData().f0.empty();
+
+  // Update UI cursor position from host playback position (only when we have
+  // analyzed audio)
+  if (isRealtime && mainComponent) {
+    if (hostIsPlaying && hasProject) {
+      // Only sync cursor after capture is complete and analyzed
+      double timeInSeconds = 0.0;
+      if (auto samples = posInfo.getTimeInSamples())
+        timeInSeconds = static_cast<double>(*samples) / hostSampleRate;
+      else if (auto time = posInfo.getTimeInSeconds())
+        timeInSeconds = *time;
+
+      auto state = hostUiSyncState;
+      state->latestSeconds.store(timeInSeconds);
+
+      // Never touch UI on the audio thread: coalesce to a single async update
+      if (!state->posPending.exchange(true)) {
+        juce::Component::SafePointer<MainComponent> safeMain(mainComponent);
+        juce::MessageManager::callAsync([safeMain, state]() {
+          state->posPending.store(false);
+          if (safeMain != nullptr)
+            safeMain->updatePlaybackPosition(state->latestSeconds.load());
+        });
+      }
+    } else if (!hostIsPlaying && hasProject) {
+      auto state = hostUiSyncState;
+      if (!state->stoppedPending.exchange(true)) {
+        juce::Component::SafePointer<MainComponent> safeMain(mainComponent);
+        juce::MessageManager::callAsync([safeMain, state]() {
+          state->stoppedPending.store(false);
+          if (safeMain != nullptr)
+            safeMain->notifyHostStopped();
+        });
+      }
+    }
+  }
+
+  if (!hostIsPlaying) {
+    // Still let the capture state machine observe transport stop so it can
+    // finalize and dispatch analysis, but never output audio when stopped.
+    captureController->processBlock(buffer, false);
+
+    if (captureController->shouldFinalize()) {
+      NonAraCaptureController::FinalizeResult result;
+      if (captureController->finalizeCapture(hostSampleRate, result) &&
+          mainComponent) {
+        juce::Component::SafePointer<MainComponent> safeMain(mainComponent);
+        auto controller = captureController;
+        juce::MessageManager::callAsync([safeMain, controller,
+                                         samples = result.numSamples,
+                                         sr = result.sampleRate]() mutable {
+          if (safeMain == nullptr)
+            return;
+          if (!controller)
+            return;
+          auto trimmed = controller->copyCapturedAudio(samples);
+          controller->onAnalysisDispatched();
+          safeMain->getToolbar().setStatusMessage(TR("progress.analyzing"));
+          safeMain->setHostAudio(trimmed, sr);
+        });
+      }
+    }
+
+    buffer.clear();
+    return;
+  }
 
   if (hasProject && realtimeProcessor.isReady()) {
     // Real-time pitch correction mode
@@ -175,98 +237,65 @@ void HachiTuneAudioProcessor::processNonARAMode(
   }
 
   // Capture mode
-  CaptureState state = captureState.load();
+  captureController->processBlock(buffer, hostIsPlaying);
 
-  // Start capturing when host plays and we detect audio
-  if (state == CaptureState::WaitingForAudio && hostIsPlaying) {
-    // Detect audio input
-    float maxLevel = 0.0f;
-    for (int ch = 0; ch < numChannels; ++ch) {
-      auto *data = buffer.getReadPointer(ch);
-      for (int i = 0; i < numSamples; ++i)
-        maxLevel = std::max(maxLevel, std::abs(data[i]));
+  // UI: transition into recording
+  auto currentState = captureController->getState();
+  if (currentState != lastCaptureUiState) {
+    if (currentState == NonAraCaptureController::State::Capturing &&
+        mainComponent) {
+      juce::Component::SafePointer<MainComponent> safeMain(mainComponent);
+      juce::MessageManager::callAsync([safeMain]() {
+        if (safeMain)
+          safeMain->getToolbar().setStatusMessage(TR("progress.recording"));
+      });
     }
-
-    if (maxLevel > AUDIO_THRESHOLD) {
-      captureState = CaptureState::Capturing;
-      capturePosition = 0;
-      state = CaptureState::Capturing;
-
-      // Notify UI that capture started
-      if (mainComponent) {
-        juce::Component::SafePointer<MainComponent> safeMain(mainComponent);
-        juce::MessageManager::callAsync([safeMain]() {
-          if (safeMain)
-            safeMain->getToolbar().setStatusMessage(TR("progress.recording"));
-        });
-      }
-    }
+    lastCaptureUiState = currentState;
   }
 
-  if (state == CaptureState::Capturing) {
-    if (hostIsPlaying) {
-      // Continue capturing while host is playing
-      int spaceLeft = captureBuffer.getNumSamples() - capturePosition;
-      int toCopy = std::min(numSamples, spaceLeft);
-
-      if (toCopy > 0) {
-        for (int ch = 0;
-             ch < std::min(numChannels, captureBuffer.getNumChannels()); ++ch)
-          captureBuffer.copyFrom(ch, capturePosition, buffer, ch, 0, toCopy);
-        capturePosition += toCopy;
-      }
-
-      // Only stop if buffer is completely full (safety limit)
-      if (capturePosition >= captureBuffer.getNumSamples())
-        finishCapture();
-    } else {
-      // Host stopped playing - finish capture and analyze
-      finishCapture();
+  if (captureController->shouldFinalize()) {
+    NonAraCaptureController::FinalizeResult result;
+    if (captureController->finalizeCapture(hostSampleRate, result) &&
+        mainComponent) {
+      juce::Component::SafePointer<MainComponent> safeMain(mainComponent);
+      auto controller = captureController;
+      juce::MessageManager::callAsync([safeMain, controller,
+                                       samples = result.numSamples,
+                                       sr = result.sampleRate]() mutable {
+        if (safeMain == nullptr)
+          return;
+        if (!controller)
+          return;
+        auto trimmed = controller->copyCapturedAudio(samples);
+        controller->onAnalysisDispatched();
+        safeMain->getToolbar().setStatusMessage(TR("progress.analyzing"));
+        safeMain->setHostAudio(trimmed, sr);
+      });
     }
   }
 
   // Passthrough during capture
 }
 
-void HachiTuneAudioProcessor::finishCapture() {
-  if (capturePosition < static_cast<int>(hostSampleRate * 0.5))
-    return; // Too short
-
-  captureState = CaptureState::Complete;
-
-  // Trim buffer
-  juce::AudioBuffer<float> trimmed;
-  trimmed.setSize(captureBuffer.getNumChannels(), capturePosition);
-  for (int ch = 0; ch < captureBuffer.getNumChannels(); ++ch)
-    trimmed.copyFrom(ch, 0, captureBuffer, ch, 0, capturePosition);
-
-  // Send to MainComponent for analysis
-  double sr = hostSampleRate;
-  juce::Component::SafePointer<MainComponent> safeMain(mainComponent);
-  juce::MessageManager::callAsync([safeMain, trimmed, sr]() {
-    if (safeMain) {
-      safeMain->getToolbar().setStatusMessage(TR("progress.analyzing"));
-      safeMain->setHostAudio(trimmed, sr);
-    }
-  });
-}
-
 void HachiTuneAudioProcessor::startCapture() {
-  captureBuffer.clear();
-  capturePosition = 0;
-  captureState = CaptureState::Capturing;
+  captureController->resetToWaiting();
 }
 
-void HachiTuneAudioProcessor::stopCapture() {
-  if (captureState == CaptureState::Capturing)
-    finishCapture();
-}
+void HachiTuneAudioProcessor::stopCapture() { captureController->stop(); }
 
 void HachiTuneAudioProcessor::setMainComponent(MainComponent *mc) {
   mainComponent = mc;
   if (mc) {
     realtimeProcessor.setProject(mc->getProject());
     realtimeProcessor.setVocoder(mc->getVocoder());
+
+    if (mc->getProject() && pendingStateJson.isNotEmpty()) {
+      auto json = juce::JSON::parse(pendingStateJson);
+      if (json.isObject()) {
+        ProjectSerializer::fromJson(*mc->getProject(), json);
+      }
+      pendingStateJson.clear();
+    }
   } else {
     realtimeProcessor.setProject(nullptr);
     realtimeProcessor.setVocoder(nullptr);
@@ -278,24 +307,32 @@ juce::AudioProcessorEditor *HachiTuneAudioProcessor::createEditor() {
 }
 
 void HachiTuneAudioProcessor::getStateInformation(juce::MemoryBlock &destData) {
+  juce::String jsonString;
   if (mainComponent && mainComponent->getProject()) {
     auto json = ProjectSerializer::toJson(*mainComponent->getProject());
-    auto jsonString = juce::JSON::toString(json, false);
-    destData.append(jsonString.toRawUTF8(), jsonString.getNumBytesAsUTF8());
+    jsonString = juce::JSON::toString(json, false);
+  } else if (pendingStateJson.isNotEmpty()) {
+    jsonString = pendingStateJson;
   }
+  if (jsonString.isNotEmpty())
+    destData.append(jsonString.toRawUTF8(), jsonString.getNumBytesAsUTF8());
 }
 
 void HachiTuneAudioProcessor::setStateInformation(const void *data,
                                                   int sizeInBytes) {
+  juce::String jsonString(
+      juce::CharPointer_UTF8(static_cast<const char *>(data)),
+      static_cast<size_t>(sizeInBytes));
+
   if (mainComponent && mainComponent->getProject()) {
-    juce::String jsonString(
-        juce::CharPointer_UTF8(static_cast<const char *>(data)),
-        static_cast<size_t>(sizeInBytes));
     auto json = juce::JSON::parse(jsonString);
     if (json.isObject()) {
       ProjectSerializer::fromJson(*mainComponent->getProject(), json);
+      return;
     }
   }
+
+  pendingStateJson = jsonString;
 }
 
 juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter() {

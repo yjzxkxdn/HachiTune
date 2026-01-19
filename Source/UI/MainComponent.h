@@ -24,6 +24,7 @@
 #include "Workspace/WorkspaceComponent.h"
 
 #include <atomic>
+#include <cstdint>
 #include <thread>
 
 class MainComponent : public juce::Component,
@@ -72,6 +73,11 @@ public:
   std::function<void()>
       onPitchEditFinished; // Called when pitch editing is finished
                            // (Melodyne-style: triggers real-time update)
+
+  // Plugin mode - request host transport control (optional; only works if host
+  // supports it)
+  std::function<void(bool shouldPlay)> onRequestHostPlayState;
+  std::function<void()> onRequestHostStop;
 
   // Plugin mode - update playback position from host
   void updatePlaybackPosition(double timeSeconds);
@@ -153,8 +159,10 @@ private:
 
   // Async load state
   std::thread loaderThread;
+  std::thread loaderJoinerThread;
   std::atomic<bool> isLoadingAudio{false};
   std::atomic<bool> cancelLoading{false};
+  std::atomic<std::uint64_t> hostAnalysisJobId{0};
   std::atomic<double> loadingProgress{0.0};
   juce::CriticalSection loadingMessageLock;
   juce::String loadingMessage;

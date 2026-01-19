@@ -81,8 +81,8 @@ void AudioAnalyzer::analyze(Project &project, ProgressCallback onProgress,
   // Compute mel spectrogram
   if (onProgress)
     onProgress(0.35, "Computing mel spectrogram...");
-  MelSpectrogram melComputer(SAMPLE_RATE, N_FFT, HOP_SIZE, NUM_MELS, FMIN,
-                             FMAX);
+  MelSpectrogram melComputer(audioData.sampleRate, N_FFT, HOP_SIZE, NUM_MELS,
+                             FMIN, FMAX);
   audioData.melSpectrogram = melComputer.compute(samples, numSamples);
 
   int targetFrames = static_cast<int>(audioData.melSpectrogram.size());
@@ -178,14 +178,16 @@ void AudioAnalyzer::extractF0WithRMVPE(AudioData &audioData, int targetFrames) {
 
   auto *detector = rmvpeDetector ? rmvpeDetector.get() : externalRMVPEDetector;
   std::vector<float> rmvpeF0 =
-      detector->extractF0(samples, numSamples, SAMPLE_RATE);
+      detector->extractF0(samples, numSamples, audioData.sampleRate);
 
   if (!rmvpeF0.empty() && targetFrames > 0) {
     audioData.f0.resize(targetFrames);
 
     // Time per frame for each system
-    const double rmvpeFrameTime = 160.0 / 16000.0;   // 0.01 seconds
-    const double vocoderFrameTime = 512.0 / 44100.0; // ~0.01161 seconds
+    const double rmvpeFrameTime = 160.0 / 16000.0; // 0.01 seconds
+    const double vocoderFrameTime =
+        static_cast<double>(HOP_SIZE) /
+        static_cast<double>(std::max(1, audioData.sampleRate));
 
     for (int i = 0; i < targetFrames; ++i) {
       double vocoderTime = i * vocoderFrameTime;
@@ -233,14 +235,16 @@ void AudioAnalyzer::extractF0WithFCPE(AudioData &audioData, int targetFrames) {
 
   auto *detector = fcpeDetector ? fcpeDetector.get() : externalFCPEDetector;
   std::vector<float> fcpeF0 =
-      detector->extractF0(samples, numSamples, SAMPLE_RATE);
+      detector->extractF0(samples, numSamples, audioData.sampleRate);
 
   if (!fcpeF0.empty() && targetFrames > 0) {
     audioData.f0.resize(targetFrames);
 
     // Time per frame for each system
-    const double fcpeFrameTime = 160.0 / 16000.0;    // 0.01 seconds
-    const double vocoderFrameTime = 512.0 / 44100.0; // ~0.01161 seconds
+    const double fcpeFrameTime = 160.0 / 16000.0; // 0.01 seconds
+    const double vocoderFrameTime =
+        static_cast<double>(HOP_SIZE) /
+        static_cast<double>(std::max(1, audioData.sampleRate));
 
     for (int i = 0; i < targetFrames; ++i) {
       double vocoderTime = i * vocoderFrameTime;

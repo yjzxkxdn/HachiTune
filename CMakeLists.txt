@@ -179,7 +179,8 @@ file(GLOB_RECURSE PITCH_EDITOR_COMMON_SOURCES
 file(GLOB PLUGIN_SOURCES
     "Source/Plugin/PluginProcessor.cpp" "Source/Plugin/PluginProcessor.h"
     "Source/Plugin/PluginEditor.cpp" "Source/Plugin/PluginEditor.h"
-    "Source/Plugin/ARADocumentController.cpp" "Source/Plugin/ARADocumentController.h")
+    "Source/Plugin/ARADocumentController.cpp" "Source/Plugin/ARADocumentController.h"
+    "Source/Plugin/NonAraCaptureController.cpp" "Source/Plugin/NonAraCaptureController.h")
 
 target_sources(HachiTune PRIVATE
     Source/Main.cpp

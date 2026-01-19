@@ -297,6 +297,8 @@ MainComponent::~MainComponent() {
   cancelLoading = true;
   if (loaderThread.joinable())
     loaderThread.join();
+  if (loaderJoinerThread.joinable())
+    loaderJoinerThread.join();
 
   cancelRender = true;
   if (renderThread.joinable())
@@ -848,8 +850,8 @@ void MainComponent::analyzeAudio(
   onProgress(0.35, "Computing mel spectrogram...");
   // Compute mel spectrogram first (to know target frame count)
   // This is computationally intensive and runs in background thread
-  MelSpectrogram melComputer(SAMPLE_RATE, N_FFT, HOP_SIZE, NUM_MELS, FMIN,
-                             FMAX);
+  MelSpectrogram melComputer(audioData.sampleRate, N_FFT, HOP_SIZE, NUM_MELS,
+                             FMIN, FMAX);
   audioData.melSpectrogram = melComputer.compute(samples, numSamples);
 
   int targetFrames = static_cast<int>(audioData.melSpectrogram.size());
@@ -877,14 +879,14 @@ void MainComponent::analyzeAudio(
   if (detectorType == PitchDetectorType::RMVPE && rmvpePitchDetector &&
       rmvpePitchDetector->isLoaded()) {
     LOG(">>> USING RMVPE (selected)");
-    extractedF0 =
-        rmvpePitchDetector->extractF0(samples, numSamples, SAMPLE_RATE);
+    extractedF0 = rmvpePitchDetector->extractF0(samples, numSamples,
+                                                audioData.sampleRate);
     useNeuralDetector = true;
   } else if (detectorType == PitchDetectorType::FCPE && fcpePitchDetector &&
              fcpePitchDetector->isLoaded()) {
     LOG(">>> USING FCPE (selected)");
     extractedF0 =
-        fcpePitchDetector->extractF0(samples, numSamples, SAMPLE_RATE);
+        fcpePitchDetector->extractF0(samples, numSamples, audioData.sampleRate);
     useNeuralDetector = true;
   } else {
     LOG("WARNING: Selected detector not available!");
@@ -899,13 +901,13 @@ void MainComponent::analyzeAudio(
     isFallback = true;
     if (rmvpePitchDetector && rmvpePitchDetector->isLoaded()) {
       LOG(">>> FALLBACK: Using RMVPE");
-      extractedF0 =
-          rmvpePitchDetector->extractF0(samples, numSamples, SAMPLE_RATE);
+      extractedF0 = rmvpePitchDetector->extractF0(samples, numSamples,
+                                                  audioData.sampleRate);
       useNeuralDetector = true;
     } else if (fcpePitchDetector && fcpePitchDetector->isLoaded()) {
       LOG(">>> FALLBACK: Using FCPE");
-      extractedF0 =
-          fcpePitchDetector->extractF0(samples, numSamples, SAMPLE_RATE);
+      extractedF0 = fcpePitchDetector->extractF0(samples, numSamples,
+                                                 audioData.sampleRate);
       useNeuralDetector = true;
     }
   }
@@ -921,8 +923,10 @@ void MainComponent::analyzeAudio(
     audioData.f0.resize(targetFrames);
 
     // Time per frame for each system
-    const double neuralFrameTime = 160.0 / 16000.0;  // 0.01 seconds
-    const double vocoderFrameTime = 512.0 / 44100.0; // ~0.01161 seconds
+    const double neuralFrameTime = 160.0 / 16000.0; // 0.01 seconds
+    const double vocoderFrameTime =
+        static_cast<double>(HOP_SIZE) /
+        static_cast<double>(std::max(1, audioData.sampleRate));
 
     for (int i = 0; i < targetFrames; ++i) {
       double vocoderTime = i * vocoderFrameTime;
@@ -1206,9 +1210,10 @@ void MainComponent::play() {
   // In plugin mode, playback is controlled by the host
   // We only update UI state, but don't actually start playback
   if (isPluginMode()) {
-    // In plugin mode, playback is handled by the host
-    // We can't control playback directly, but we can update UI state
-    // The host will call updatePlaybackPosition() to sync the cursor
+    if (onRequestHostPlayState)
+      onRequestHostPlayState(true);
+    // UI will be kept in sync by host callbacks; still update immediately for
+    // responsiveness
     isPlaying = true;
     toolbar.setPlaying(true);
     return;
@@ -1226,8 +1231,8 @@ void MainComponent::play() {
 void MainComponent::pause() {
   // In plugin mode, playback is controlled by the host
   if (isPluginMode()) {
-    // In plugin mode, we can't pause playback directly
-    // The host controls playback, we only update UI state
+    if (onRequestHostPlayState)
+      onRequestHostPlayState(false);
     isPlaying = false;
     toolbar.setPlaying(false);
     return;
@@ -1244,11 +1249,10 @@ void MainComponent::pause() {
 void MainComponent::stop() {
   // In plugin mode, playback is controlled by the host
   if (isPluginMode()) {
-    // In plugin mode, we can't stop playback directly
-    // The host controls playback, we only update UI state
+    if (onRequestHostStop)
+      onRequestHostStop();
     isPlaying = false;
     toolbar.setPlaying(false);
-    // Keep cursor at current position - user can press Home to go to start
     return;
   }
 
@@ -1758,12 +1762,41 @@ void MainComponent::setHostAudio(const juce::AudioBuffer<float> &buffer,
   if (!project)
     project = std::make_unique<Project>();
 
+  juce::AudioBuffer<float> resampledBuffer;
+  const double inputSampleRate = sampleRate;
+  if (inputSampleRate > 0.0 &&
+      std::abs(inputSampleRate - static_cast<double>(SAMPLE_RATE)) > 1e-6) {
+    const int inSamples = buffer.getNumSamples();
+    const int outSamples = static_cast<int>(
+        std::llround(static_cast<double>(inSamples) *
+                     (static_cast<double>(SAMPLE_RATE) / inputSampleRate)));
+    const int channels = buffer.getNumChannels();
+    resampledBuffer.setSize(channels, std::max(0, outSamples), false, false,
+                            true);
+    resampledBuffer.clear();
+
+    const double ratio = inputSampleRate / static_cast<double>(SAMPLE_RATE);
+    for (int ch = 0; ch < channels; ++ch) {
+      juce::LagrangeInterpolator interp;
+      interp.reset();
+      interp.process(ratio, buffer.getReadPointer(ch),
+                     resampledBuffer.getWritePointer(ch),
+                     resampledBuffer.getNumSamples());
+    }
+  }
+
+  const juce::AudioBuffer<float> &stored =
+      resampledBuffer.getNumSamples() > 0 ? resampledBuffer : buffer;
+  const double storedSampleRate = resampledBuffer.getNumSamples() > 0
+                                      ? static_cast<double>(SAMPLE_RATE)
+                                      : inputSampleRate;
+
   // Store sample rate and waveform (on message thread)
-  project->getAudioData().sampleRate = static_cast<int>(sampleRate);
-  project->getAudioData().waveform = buffer;
+  project->getAudioData().sampleRate = static_cast<int>(storedSampleRate);
+  project->getAudioData().waveform = stored;
 
   // Store original waveform for synthesis
-  originalWaveform = buffer;
+  originalWaveform = stored;
   hasOriginalWaveform = true;
 
   // Show analyzing progress
@@ -1771,11 +1804,26 @@ void MainComponent::setHostAudio(const juce::AudioBuffer<float> &buffer,
 
   // Run analysis in background thread to avoid blocking UI
   // Use the same analysis logic as loadAudioFile for code sharing
-  if (loaderThread.joinable())
-    loaderThread.join();
+  cancelLoading.store(true);
+  if (loaderThread.joinable()) {
+    if (loaderJoinerThread.joinable())
+      loaderJoinerThread.join();
+    auto old = std::move(loaderThread);
+    loaderJoinerThread = std::thread([t = std::move(old)]() mutable {
+      if (t.joinable())
+        t.join();
+    });
+  }
+  cancelLoading.store(false);
 
-  loaderThread = std::thread([safeThis]() {
+  const auto jobId = hostAnalysisJobId.fetch_add(1) + 1;
+
+  loaderThread = std::thread([safeThis, jobId]() {
     if (safeThis == nullptr)
+      return;
+
+    if (safeThis->cancelLoading.load() ||
+        safeThis->hostAnalysisJobId.load() != jobId)
       return;
 
     // Create a copy of project data for analysis
@@ -1793,10 +1841,19 @@ void MainComponent::setHostAudio(const juce::AudioBuffer<float> &buffer,
 
     // Use shared analyzeAudio function (same as loadAudioFile)
     // This ensures code reuse and consistency
-    auto updateProgress = [safeThis](double p, const juce::String &msg) {
+    auto updateProgress = [safeThis, jobId](double p, const juce::String &msg) {
+      if (safeThis == nullptr)
+        return;
+      if (safeThis->cancelLoading.load() ||
+          safeThis->hostAnalysisJobId.load() != jobId)
+        return;
+
       // Progress updates can be shown in toolbar if needed
-      juce::MessageManager::callAsync([safeThis, msg, p]() {
+      juce::MessageManager::callAsync([safeThis, msg, p, jobId]() {
         if (safeThis != nullptr) {
+          if (safeThis->cancelLoading.load() ||
+              safeThis->hostAnalysisJobId.load() != jobId)
+            return;
           // Could update progress bar here if needed
           DBG("MainComponent::setHostAudio - " << msg << " (" << (p * 100)
                                                << "%)");
@@ -1805,14 +1862,25 @@ void MainComponent::setHostAudio(const juce::AudioBuffer<float> &buffer,
     };
 
     // Perform analysis using shared function
+    if (safeThis->cancelLoading.load() ||
+        safeThis->hostAnalysisJobId.load() != jobId)
+      return;
+
     safeThis->analyzeAudio(*projectCopy, updateProgress);
+
+    if (safeThis->cancelLoading.load() ||
+        safeThis->hostAnalysisJobId.load() != jobId)
+      return;
 
     DBG("MainComponent::setHostAudio - analysis complete, updating UI");
 
     // Analysis complete - update main project on message thread
     // Use same UI update logic as loadAudioFile for consistency
-    juce::MessageManager::callAsync([safeThis, projectCopy]() mutable {
+    juce::MessageManager::callAsync([safeThis, projectCopy, jobId]() mutable {
       if (safeThis == nullptr)
+        return;
+
+      if (safeThis->hostAnalysisJobId.load() != jobId)
         return;
 
       // Clear undo history before replacing project to avoid dangling pointers
