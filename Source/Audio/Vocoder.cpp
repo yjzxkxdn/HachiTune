@@ -628,7 +628,16 @@ Ort::SessionOptions Vocoder::createSessionOptions() {
 #ifdef USE_DIRECTML
       if (executionDevice == "DirectML") {
     try {
-      sessionOptions.AppendExecutionProvider("DML");
+      const OrtApi &ortApi = Ort::GetApi();
+      const OrtDmlApi *ortDmlApi = nullptr;
+      Ort::ThrowOnError(ortApi.GetExecutionProviderApi(
+          "DML", ORT_API_VERSION, reinterpret_cast<const void **>(&ortDmlApi)));
+
+      sessionOptions.DisableMemPattern();
+      sessionOptions.SetExecutionMode(ORT_SEQUENTIAL);
+
+      Ort::ThrowOnError(ortDmlApi->SessionOptionsAppendExecutionProvider_DML(
+          sessionOptions, 0));
       log("DirectML execution provider added");
     } catch (const Ort::Exception &e) {
       log("Failed to add DirectML provider: " + std::string(e.what()));

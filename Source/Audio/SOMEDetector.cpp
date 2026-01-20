@@ -23,7 +23,16 @@ bool SOMEDetector::loadModel(const juce::File &modelPath) {
     // Add execution provider based on build configuration
 #ifdef USE_DIRECTML
     try {
-      sessionOptions.AppendExecutionProvider("DML");
+      const OrtApi &ortApi = Ort::GetApi();
+      const OrtDmlApi *ortDmlApi = nullptr;
+      Ort::ThrowOnError(ortApi.GetExecutionProviderApi(
+          "DML", ORT_API_VERSION, reinterpret_cast<const void **>(&ortDmlApi)));
+
+      sessionOptions.DisableMemPattern();
+      sessionOptions.SetExecutionMode(ORT_SEQUENTIAL);
+
+      Ort::ThrowOnError(ortDmlApi->SessionOptionsAppendExecutionProvider_DML(
+          sessionOptions, 0));
       DBG("SOME: DirectML execution provider added");
     } catch (const Ort::Exception &e) {
       DBG("SOME: Failed to add DirectML provider, using CPU");
