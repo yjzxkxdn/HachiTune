@@ -27,9 +27,11 @@ if errorlevel 1 (
 )
 
 :: Check if JUCE exists
-if not exist "JUCE" (
-    echo JUCE not found, cloning...
-    git clone --depth 1 https://github.com/juce-framework/JUCE.git
+set "JUCE_DIR=third_party\JUCE"
+if not exist "%JUCE_DIR%" (
+    echo JUCE not found, cloning into %JUCE_DIR%...
+    if not exist "third_party" mkdir "third_party"
+    git clone --depth 1 https://github.com/juce-framework/JUCE.git "%JUCE_DIR%"
     if errorlevel 1 (
         echo Failed to clone JUCE
         exit /b 1

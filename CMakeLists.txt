@@ -33,52 +33,61 @@ if(USE_DIRECTML)
 endif()
 
 # Check if ONNX Runtime already exists in build directory
-set(ONNXRUNTIME_CACHE_DIR "${CMAKE_BINARY_DIR}/_deps/onnxruntime-src")
-if(EXISTS "${ONNXRUNTIME_CACHE_DIR}/include/onnxruntime_cxx_api.h")
-    message(STATUS "ONNX Runtime already downloaded, skipping download")
-    set(ONNXRUNTIME_ROOT ${ONNXRUNTIME_CACHE_DIR})
+# 1. 如果用户已提供 ONNXRUNTIME_ROOT，验证其有效性
+if(DEFINED ONNXRUNTIME_ROOT AND EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
+    message(STATUS "Using user-provided ONNX Runtime at: ${ONNXRUNTIME_ROOT}")
+    # 保持用户设置，不做任何下载
 else()
-    # Detect platform and set download URL
-    if(WIN32)
-        if(USE_CUDA)
-            # CUDA requires CUDA-specific ONNX Runtime build
-            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-gpu-cuda12-${ONNXRUNTIME_VERSION}.zip")
-            message(STATUS "Downloading ONNX Runtime GPU CUDA12 package (Windows)")
-        elseif(USE_DIRECTML)
-            # DirectML uses the NuGet package (NuGet packages are ZIP files)
-            set(ONNXRUNTIME_URL "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.DirectML/${ONNXRUNTIME_VERSION}")
-            message(STATUS "Downloading ONNX Runtime DirectML package from NuGet (Windows)")
-        else()
-            # CPU-only package
-            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip")
-            message(STATUS "Downloading ONNX Runtime CPU package (Windows)")
-        endif()
-    elseif(APPLE)
-        if(USE_GPU)
-            message(WARNING "GPU acceleration is not supported on macOS, falling back to CPU")
-        endif()
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
-            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}.tgz")
-        else()
-            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-osx-x86_64-${ONNXRUNTIME_VERSION}.tgz")
-        endif()
+    # 2. 否则，检查本地缓存（即之前自动下载的）
+    set(ONNXRUNTIME_CACHE_DIR "${CMAKE_BINARY_DIR}/_deps/onnxruntime-src")
+    if(EXISTS "${ONNXRUNTIME_CACHE_DIR}/include/onnxruntime_cxx_api.h")
+        message(STATUS "ONNX Runtime found in cache, using it")
+        set(ONNXRUNTIME_ROOT ${ONNXRUNTIME_CACHE_DIR} CACHE PATH "Path to ONNX Runtime" FORCE)
     else()
-        if(USE_GPU)
-            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz")
+        # 3. 缓存也没有，才下载
+        message(STATUS "ONNX Runtime not found, downloading...")
+        # Detect platform and set download URL
+        if(WIN32)
+            if(USE_CUDA)
+                # CUDA requires CUDA-specific ONNX Runtime build
+                set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-gpu-cuda12-${ONNXRUNTIME_VERSION}.zip")
+                message(STATUS "Downloading ONNX Runtime GPU CUDA12 package (Windows)")
+            elseif(USE_DIRECTML)
+                # DirectML uses the NuGet package (NuGet packages are ZIP files)
+                set(ONNXRUNTIME_URL "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime.DirectML/${ONNXRUNTIME_VERSION}")
+                message(STATUS "Downloading ONNX Runtime DirectML package from NuGet (Windows)")
+            else()
+                # CPU-only package
+                set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip")
+                message(STATUS "Downloading ONNX Runtime CPU package (Windows)")
+            endif()
+        elseif(APPLE)
+            if(USE_GPU)
+                message(WARNING "GPU acceleration is not supported on macOS, falling back to CPU")
+            endif()
+            if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+                set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}.tgz")
+            else()
+                set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-osx-x86_64-${ONNXRUNTIME_VERSION}.tgz")
+            endif()
         else()
-            set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz")
+            if(USE_GPU)
+                set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz")
+            else()
+                set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz")
+            endif()
         endif()
+
+        message(STATUS "Downloading ONNX Runtime from: ${ONNXRUNTIME_URL}")
+
+        FetchContent_Declare(
+            onnxruntime
+            URL ${ONNXRUNTIME_URL}
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        )
+        FetchContent_MakeAvailable(onnxruntime)
+        set(ONNXRUNTIME_ROOT ${onnxruntime_SOURCE_DIR})
     endif()
-
-    message(STATUS "Downloading ONNX Runtime from: ${ONNXRUNTIME_URL}")
-
-    FetchContent_Declare(
-        onnxruntime
-        URL ${ONNXRUNTIME_URL}
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    )
-    FetchContent_MakeAvailable(onnxruntime)
-    set(ONNXRUNTIME_ROOT ${onnxruntime_SOURCE_DIR})
 endif()
 
 # Handle different directory structures for DirectML NuGet package vs regular packages
